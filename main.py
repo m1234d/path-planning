@@ -19,6 +19,7 @@ from __future__ import division       #                           ''
 import time     # import the time library for the sleep function
 import brickpi3 # import the BrickPi3 drivers
 import math
+import path
 
 BP = brickpi3.BrickPi3() # Create an instance of the BrickPi3 class. BP will be the BrickPi3 object.
 
@@ -40,7 +41,7 @@ class Pid:
         action = self.kp * error
         delta = (error - self.last_error) / dt
         action += self.kd * delta
-        if action <= 10:
+        if abs(action) <= 10:
             self.last_error = error
             self.acc.append(error*dt)
             # if self.count > self.dist:
@@ -82,7 +83,7 @@ def drive(motor1, motor2):
         BP.set_motor_power(BP.PORT_A, 1.23*motor1 - 4)
         BP.set_motor_power(BP.PORT_B, 1.3*motor2 - 4)
     elif motor1 > 0:
-        BP.set_motor_power(BP.PORT_A, 1.20*motor1 + 4)
+        BP.set_motor_power(BP.PORT_A, 1.25*motor1 + 4) #1.18
         BP.set_motor_power(BP.PORT_B, 1.3*motor2 + 4)
     else:
         BP.set_motor_power(BP.PORT_A, 1.20*motor1)
@@ -109,34 +110,40 @@ def follow_light():
     except KeyboardInterrupt:
         BP.reset_all()
 
-def odometry(moves):
+def odometry(start, moves):
     reset_encoders()
     tstep = 0.02
     tcount = 0
     movecount = 0
-    radius = 1.06
-    width = 5.61
+    radius = 1.075
+    width = 5.73 #higher = more turn
     prev_click_left = 0
     prev_click_right = 0
     prev_theta = 0
-    prev_x = 0
-    prev_y = 0
+    prev_x = start[1]
+    prev_y = start[0]
     sign = 1
     target_x = moves[movecount][0]
     target_y = moves[movecount][1]
     target_theta = moves[movecount][2]
 
-    thetaPid = Pid(500, 0.1, 1)
-    distPid = Pid(10, 3, 0)
+    #thetaPid = Pid(500, 0.1, 1)
+    thetaPid = Pid(230, .1, .3)
+    distPid = Pid(20, 0, .5)
     #distPid = Pid(0, 0, 0)
 
     distThreshold = 0.05
-    thetaThreshold = 0.01
+    thetaThreshold = 0.005
+    movingThreshold = 0.001
     goodcount = 0
     moveDone = False
     actuallyDone = False
     stopAngle = False
     anglecount = 0
+    saved_target = 0
+    endTime = 0
+    offset = 0
+    moveTimer = 0
 
     distError = math.sqrt(target_x**2 + target_y**2)
     if distError < 0:
@@ -144,7 +151,7 @@ def odometry(moves):
 
     try:
         while True:
-            click_left = encoder1()
+            click_left = encoder1()*1.0023 #higher = turns more left
             click_right = encoder2()
             angular_left = (click_left - prev_click_left) / tstep
             angular_right = (click_right - prev_click_right) / tstep
@@ -181,28 +188,50 @@ def odometry(moves):
 
             ## PID
 
-            #Get distance and theta from target
+            #Get distance and theta from target_y
             align_theta = math.atan2(target_y - y, target_x - x)
-
+            if abs(align_theta - theta) > math.pi:
+                offset = 2*math.pi
+            else:
+                offset = 0
+            align_theta = align_theta + offset
             thetaError = align_theta - theta
+
             distError = sign*(math.sqrt((target_x - x)**2 + (target_y - y)**2)*math.cos(thetaError))
             distAction = distPid.action(distError, tstep)
 
             if stopAngle:
-                thetaError = 0
+                thetaError = saved_target - theta
 
             if moveDone:
                 thetaError = target_theta - theta
+                if abs(thetaError) > math.pi:
+                    offset = 2*math.pi
+                else:
+                    offset = 0
+                thetaError = thetaError + offset
                 distAction = 0
 
-            thetaAction = thetaPid.action(thetaError, tstep)
+            if abs(distError) > 5:
+                thetaAction = thetaPid.action(thetaError*1, tstep)
+            else:
+                moveTimer += 1
+                thetaAction = thetaPid.action(thetaError, tstep)
 
-            print(distError, thetaError*180/math.pi)
+            #print(distError, thetaError*180/math.pi)
+            print(align_theta*180/math.pi)
+            print(theta*180/math.pi)
+            print(thetaAction)
+            print(" ")
+            speedCap = 30
+            if distAction > speedCap:
+                distAction = speedCap
+            elif distAction < -speedCap:
+                distAction = -speedCap
 
             leftMotor = distAction - thetaAction
             rightMotor = distAction + thetaAction
 
-            speedCap = 30
             if leftMotor > speedCap:
                 leftMotor = speedCap
             if leftMotor < -speedCap:
@@ -212,41 +241,53 @@ def odometry(moves):
             if rightMotor < -speedCap:
                 rightMotor = -speedCap
 
-            if tcount == 0:
-                leftMotor = leftMotor*.3
-                rightMotor = rightMotor*.3
+            # if tcount == 0:
+            #     leftMotor = leftMotor*.3
+            #     rightMotor = rightMotor*.3
 
-            if tcount == 1:
-                leftMotor = leftMotor*.6
-                rightMotor = rightMotor*.6
+            # if tcount == 1:
+            #     leftMotor = leftMotor*.6
+            #     rightMotor = rightMotor*.6
+
+            #print(leftMotor, rightMotor)
             drive(leftMotor, rightMotor)
 
             time.sleep(tstep)
             tcount+=1
             if moveDone:
+                endTime += 1
                 if abs(thetaError) <= thetaThreshold:
                     goodcount += 1
             else:
-                if abs(thetaError) <= thetaThreshold and abs(distError) <= 1:
+                if abs(distError) <= 5:
                     anglecount += 1
                 if abs(distError) <= distThreshold and abs(thetaError) <= thetaThreshold:
-                    goodcount += 1
+                    goodcount += 1 
 
-            if anglecount >= 10:
+            if stopAngle == False and anglecount >= 5:
+                print("STOPPED!")
+                saved_target = align_theta
                 stopAngle = True
 
-            if goodcount >= 30:
-                goodcount = 0
-                moveDone = True
-                print("move done")
+            if goodcount >= 30 or moveTimer >= 100:
+                if moveDone == False:
+                    moveDone = True
+                    drive(0, 0)
+                    print("move done")
+                    time.sleep(.5)
                 if target_theta == None:
                     actuallyDone = True
                 elif abs(target_theta - theta) <= thetaThreshold:
                     actuallyDone = True
+                elif endTime >= 1000:
+                    actuallyDone = True
 
 
             if actuallyDone:
+                print("DONE")
                 tcount = 0
+                moveTimer =0 
+                endTime = 0
                 movecount += 1
                 anglecount = 0
                 moveDone = False
@@ -256,6 +297,9 @@ def odometry(moves):
                 print(x)
                 print(y)
                 print((theta*180/math.pi))
+                prev_x = target_x
+                prev_y = target_y
+                prev_theta = target_theta
                 drive(0, 0)
                 time.sleep(1)
                 if movecount >= len(moves):
@@ -271,13 +315,33 @@ def odometry(moves):
                 if distError < 0:
                     sign = -1
 
+                align_theta = math.atan2(target_y - y, target_x - x)
+                print(align_theta)
+                print(theta)
+                if abs(align_theta - theta) > 180:
+                    offset = 2*math.pi
+                else:
+                    offset = 0
+
+
     except KeyboardInterrupt:
         BP.reset_all()
 
 def main():
     # Step 1: Get path
-    path = [(12, 12, 0), (24, 0, 0), (12, -12, 0), (0, 0, 0)]
-    #path = [(24, 0, -math.pi/2)]
+
+    #(y, x) my y and my x
+    start = (12, 6, 'South')
+    #end = (13, 6, 'North')
+    end = (12, 48, 'South')
+    p = path.main(start, end)
+
+    #p = [(30, 60, 1.5707963267948966), (30, 65, 0.0), (48, 65, -1.5707963267948966), (48, 60, 3.141592653589793)]
+
+    print(p)
+    
+    #p = [(12, 12, 0), (24, 0, 0), (12, -12, 0), (0, 0, 0)]
+    #p = [(24, 0, -math.pi/2)]
     # Step 2: Follow path
-    odometry(path)
+    odometry(start, p)
 main()
