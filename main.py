@@ -116,7 +116,7 @@ def odometry(start, moves):
     tcount = 0
     movecount = 0
     radius = 1.075
-    width = 5.73 #higher = more turn
+    width = 5.71 #higher = more turn
     prev_click_left = 0
     prev_click_right = 0
     prev_theta = 0
@@ -151,7 +151,7 @@ def odometry(start, moves):
 
     try:
         while True:
-            click_left = encoder1()*1.0023 #higher = turns more left
+            click_left = encoder1()*1.004 #higher = turns more left
             click_right = encoder2()
             angular_left = (click_left - prev_click_left) / tstep
             angular_right = (click_right - prev_click_right) / tstep
@@ -279,7 +279,7 @@ def odometry(start, moves):
                     actuallyDone = True
                 elif abs(target_theta - theta) <= thetaThreshold:
                     actuallyDone = True
-                elif endTime >= 1000:
+                elif endTime >= 100:
                     actuallyDone = True
 
 
